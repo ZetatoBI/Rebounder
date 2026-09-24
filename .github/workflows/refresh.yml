@@ -4,6 +4,8 @@ on:
   schedule:
     - cron: "0 12 * * 1-5"        # full refresh before the US open: fundamentals, 2 years of bars, AI summaries
     - cron: "45 13-20 * * 1-5"    # hourly price refresh during US market hours (times are UTC)
+    push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       mode:
