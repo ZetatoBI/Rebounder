@@ -1,0 +1,4 @@
+web/data/
+web/preview.html
+__pycache__/
+.venv/
