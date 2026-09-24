@@ -2,9 +2,9 @@ name: Refresh data and deploy
 
 on:
   schedule:
-    - cron: "0 12 * * 1-5"        # full refresh before the US open: fundamentals, 2 years of bars, AI summaries
-    - cron: "45 13-20 * * 1-5"    # hourly price refresh during US market hours (times are UTC)
-    push:
+    - cron: "0 12 * * 1-5"        # full refresh before the US open
+    - cron: "45 13-20 * * 1-5"    # hourly price refresh during US market hours (UTC)
+  push:
     branches: [main]
   workflow_dispatch:
     inputs:
@@ -32,7 +32,6 @@ jobs:
           python-version: "3.12"
       - run: pip install -r requirements.txt
 
-      # Keep downloaded data between runs without committing it to git.
       - uses: actions/cache@v4
         with:
           path: web/data
