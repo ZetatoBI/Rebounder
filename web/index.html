@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Rebounder | Zetato Studios</title>
+<!-- Testing phase: keeps search engines from listing the app. Remove at public launch. -->
+<meta name="robots" content="noindex, nofollow">
+<meta name="description" content="Screen large, fairly valued stocks trading in tight price channels, and test channel rules on real price history.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="demo-banner" class="demo-banner" hidden>Demo prices from fictional companies. Run the data pipeline to load real market data.</div>
+<header class="topbar">
+  <div class="brand">
+    <small>Zetato Studios</small>
+    <h1>Rebounder</h1>
+  </div>
+  <div class="freshness" id="freshness">Loading data</div>
+</header>
+
+<div class="layout">
+  <aside class="side" aria-label="Screen and watchlist">
+    <details class="criteria" id="criteria">
+      <summary>Your criteria</summary>
+      <div id="criteria-body"></div>
+    </details>
+    <div id="watchlist" aria-live="polite"></div>
+  </aside>
+
+  <main class="main" id="main">
+    <p class="empty">Pick a stock from the watchlist to see its channel, valuation and history.</p>
+  </main>
+</div>
+
+<footer class="footer">
+  Rebounder is an educational screening and research tool by Zetato Studios. It shows which stocks match criteria you set, using data refreshed hourly. It does not recommend buying or selling any security, and nothing here is investment advice. Backtests apply rules to real historical prices and are hypothetical: they do not include every real-world cost and do not predict future results. Valuation and analyst figures come from third-party sources and may be delayed or wrong.
+</footer>
+
+<script src="engine.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

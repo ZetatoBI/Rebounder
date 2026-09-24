@@ -1,0 +1,17 @@
+{
+  "note": "Starter universe of large, liquid US stocks. Add or remove tickers freely; peer medians are computed from this list.",
+  "tickers": [
+    "AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "AVGO", "ORCL", "CRM", "ADBE",
+    "NOW", "INTU", "IBM", "CSCO", "ACN", "AMD", "INTC", "QCOM", "TXN", "MU",
+    "AMAT", "LRCX", "ADI", "PANW", "CRWD", "WDAY", "ADSK", "SNPS", "CDNS", "FTNT",
+    "PYPL", "V", "MA", "AXP", "JPM", "BAC", "WFC", "C", "GS", "MS",
+    "SCHW", "BLK", "SPGI", "MCO", "IT", "UNH", "ELV", "CI", "CVS", "HUM",
+    "JNJ", "PFE", "MRK", "ABBV", "LLY", "BMY", "AMGN", "GILD", "TMO", "DHR",
+    "ABT", "MDT", "ISRG", "SYK", "TMUS", "VZ", "T", "CMCSA", "DIS", "NFLX",
+    "WMT", "COST", "TGT", "HD", "LOW", "NKE", "SBUX", "MCD", "LULU", "DECK",
+    "PG", "KO", "PEP", "MDLZ", "PM", "MO", "CL", "EL", "KHC", "GIS",
+    "XOM", "CVX", "COP", "SLB", "EOG", "UPS", "FDX", "UNP", "CSX", "CAT",
+    "DE", "HON", "GE", "RTX", "LMT", "BA", "MMM", "UAL", "DAL", "CHRW",
+    "NEE", "DUK", "SO", "AMT", "PLD", "EQIX", "TTD", "AKAM", "TRMB", "APTV"
+  ]
+}
