@@ -2,8 +2,9 @@ name: Refresh data and deploy
 
 on:
   schedule:
-    - cron: "0 12 * * 1-5"        # full refresh before the US open
-    - cron: "45 13-20 * * 1-5"    # hourly price refresh during US market hours (UTC)
+    - cron: "0 12 * * 1-5"        # full refresh before the US open (8 AM EDT / 7 AM EST)
+    - cron: "50 13-20 * * 1-5"    # hourly price refresh; the pipeline skips runs outside 9:30 AM to 5:05 PM ET
+    - cron: "20 21 * * 1-5"       # post-close refresh during standard time (4:20 PM EST)
   push:
     branches: [main]
   workflow_dispatch:
@@ -24,7 +25,9 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
+    outputs:
+      skip: ${{ steps.data.outputs.skip }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -35,27 +38,31 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: web/data
-          key: rw-data-${{ github.run_id }}
-          restore-keys: rw-data-
+          key: rw2-data-${{ github.run_id }}
+          restore-keys: rw2-data-
 
       - name: Pick mode
         id: mode
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then echo "mode=${{ inputs.mode }}" >> "$GITHUB_OUTPUT";
-          elif [ "${{ github.event.schedule }}" = "0 12 * * 1-5" ]; then echo "mode=full" >> "$GITHUB_OUTPUT";
-          else echo "mode=hourly" >> "$GITHUB_OUTPUT"; fi
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then echo "args=--mode ${{ inputs.mode }} --force" >> "$GITHUB_OUTPUT";
+          elif [ "${{ github.event_name }}" = "push" ]; then echo "args=--mode hourly --force" >> "$GITHUB_OUTPUT";
+          elif [ "${{ github.event.schedule }}" = "0 12 * * 1-5" ]; then echo "args=--mode full" >> "$GITHUB_OUTPUT";
+          else echo "args=--mode hourly" >> "$GITHUB_OUTPUT"; fi
 
       - name: Build data
+        id: data
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: python pipeline/build_data.py --mode ${{ steps.mode.outputs.mode }}
+        run: python pipeline/build_data.py ${{ steps.mode.outputs.args }}
 
       - uses: actions/upload-pages-artifact@v3
+        if: steps.data.outputs.skip != 'true'
         with:
           path: web
 
   deploy:
     needs: build
+    if: needs.build.outputs.skip != 'true'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
