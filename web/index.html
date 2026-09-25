@@ -6,7 +6,7 @@
 <title>Rebounder | Zetato Studios</title>
 <!-- Testing phase: keeps search engines from listing the app. Remove at public launch. -->
 <meta name="robots" content="noindex, nofollow">
-<meta name="description" content="Screen large, fairly valued stocks trading in tight price channels, and test channel rules on real price history.">
+<meta name="description" content="Screen large US stocks with four well-known strategies and test the rules on real price history.">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/svg+xml" href="icons/icon.svg">
 <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
@@ -16,7 +16,7 @@
 <meta name="apple-mobile-web-app-title" content="Rebounder">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta property="og:title" content="Rebounder by Zetato Studios">
-<meta property="og:description" content="Screen fairly valued large-cap stocks trading in tight price channels, and test channel rules on real price history.">
+<meta property="og:description" content="Screen large US stocks with channel rebound, mean reversion, trend following and momentum rules, and test them on real price history.">
 <meta property="og:image" content="https://rebounder.zetatobi.com/icons/icon-512.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
@@ -24,33 +24,64 @@
 </head>
 <body>
 <div id="demo-banner" class="demo-banner" hidden>Demo prices from fictional companies. Run the data pipeline to load real market data.</div>
+
 <header class="topbar">
   <div class="brand">
     <small>Zetato Studios</small>
     <h1>Rebounder</h1>
   </div>
-  <div class="freshness" id="freshness">Loading data</div>
+  <nav class="strategy-nav" aria-label="Strategy">
+    <div class="seg seg-strategy" id="strategy-seg" role="group"></div>
+  </nav>
+  <div class="top-right">
+    <div class="freshness" id="freshness">Loading data</div>
+    <button class="btn ghost" id="open-rules" type="button" aria-controls="rules" aria-expanded="false">Rules and filters</button>
+  </div>
 </header>
 
-<div class="layout">
-  <aside class="side" aria-label="Screen and watchlist">
-    <details class="criteria" id="criteria">
-      <summary>Your criteria</summary>
-      <div id="criteria-body"></div>
-    </details>
-    <div id="watchlist" aria-live="polite"></div>
-  </aside>
+<div class="strategy-strip">
+  <p id="strategy-line"></p>
+  <div class="strip-controls">
+    <span class="tf-label">Timeframe</span>
+    <div class="seg" id="tf-seg" role="group" aria-label="Timeframe"></div>
+    <button class="linkish" id="open-explainer" type="button">How this strategy works</button>
+  </div>
+</div>
 
+<div class="layout">
+  <aside class="side" aria-label="Watchlist">
+    <div id="market-chip" class="market-chip" hidden></div>
+    <div class="groups" id="groups" role="tablist" aria-label="Watchlist groups"></div>
+    <div id="watchlist" aria-live="polite"></div>
+    <div class="side-foot" id="side-foot"></div>
+  </aside>
   <main class="main" id="main">
-    <p class="empty">Pick a stock from the watchlist to see its channel, valuation and history.</p>
+    <p class="empty">Pick a stock from the watchlist to see its chart, valuation and backtest.</p>
   </main>
 </div>
 
 <footer class="footer">
-  Rebounder is an educational screening and research tool by Zetato Studios. It shows which stocks match criteria you set, using data refreshed hourly. It does not recommend buying or selling any security, and nothing here is investment advice. Backtests apply rules to real historical prices and are hypothetical: they do not include every real-world cost and do not predict future results. Valuation and analyst figures come from third-party sources and may be delayed or wrong.
+  <p>Rebounder is an educational screening and research tool by Zetato Studios. It shows which stocks match rules you set. It does not recommend buying or selling any security, and nothing here is investment advice. Backtests apply rules to real historical prices and are hypothetical: they do not include every real-world cost and do not predict future results. Valuation and analyst figures come from third-party sources and may be delayed or wrong.</p>
+  <p id="schedule-note"></p>
 </footer>
 
+<div class="drawer-scrim" id="rules-scrim" hidden></div>
+<aside class="drawer" id="rules" aria-label="Rules and filters" hidden>
+  <div class="drawer-head">
+    <h2>Rules and filters</h2>
+    <button class="icon-btn" id="close-rules" type="button" aria-label="Close">✕</button>
+  </div>
+  <div class="drawer-body" id="rules-body"></div>
+</aside>
+
+<dialog id="explainer" class="explainer" aria-labelledby="ex-title">
+  <div id="explainer-body"></div>
+</dialog>
+
+<div id="tip" class="tip" role="tooltip" hidden></div>
+
 <script src="engine.js"></script>
+<script src="strategies.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

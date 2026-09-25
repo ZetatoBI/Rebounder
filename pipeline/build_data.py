@@ -1,46 +1,78 @@
-"""Rebounder data pipeline.
+"""Rebounder data pipeline (v2).
 
-Pulls prices, valuation ratios, analyst targets and earnings dates from Yahoo
-Finance (via yfinance), computes peer benchmarks, and writes static JSON for
-the website in web/data/.
+Pulls prices (daily, hourly, 15-minute), valuation ratios, analyst targets and
+earnings dates from Yahoo Finance (via yfinance), computes peer benchmarks, and
+writes static JSON for the website in web/data/:
+
+  screen.json                 fundamentals, peers, earnings, market trend, timestamps
+  recent/{1d,1h,15m}.json     the latest bars of every stock, for the watchlist
+  bars/{1d,1h,15m}/TICKER.json full history, loaded on demand for backtests
 
 Usage:
-  python pipeline/build_data.py --mode full     # everything (run once a day)
-  python pipeline/build_data.py --mode hourly   # refresh recent prices only
+  python pipeline/build_data.py --mode full     # everything (once a day, before the open)
+  python pipeline/build_data.py --mode hourly   # recent prices only (during market hours)
+  add --force to run an hourly refresh outside market hours
 
-MVP note: yfinance is an unofficial Yahoo client. It is fine for a private or
-unlisted MVP, but Yahoo's terms do not allow commercial redistribution. Switch
-to a licensed provider before a public launch (see README).
+MVP note: yfinance is an unofficial Yahoo client. Fine for a private or unlisted
+MVP, but Yahoo's terms do not allow commercial redistribution. Switch to a
+licensed provider before a public launch (see README).
 """
 import argparse
 import json
 import math
 import os
+import shutil
 import statistics
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import yfinance as yf
 
+VERSION = 2
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "web" / "data"
-BARS = DATA / "bars"
 UNIVERSE = ROOT / "pipeline" / "universe.json"
 SCREEN = DATA / "screen.json"
-RECENT_SESSIONS = 5          # 15-minute bars kept inline for the watchlist
-PAUSE = 0.4                  # seconds between tickers, to be polite to Yahoo
+MARKET = "SPY"          # S&P 500 proxy for the market-trend filter
+PAUSE = 0.4             # seconds between tickers, to be polite to Yahoo
+NY = ZoneInfo("America/New_York")
+
+# timeframe -> (yfinance interval, full-history period, bars kept in recent/, max age in days)
+TIMEFRAMES = {
+    "1d": ("1d", "10y", 340, None),
+    "1h": ("1h", "730d", 40 * 7, 730),
+    "15m": ("15m", "60d", 12 * 26, 60),
+}
+
+SCHEDULE = ("Prices refresh about every hour while the US market is open: the first refresh is around "
+            "9:50 AM ET and the last shortly after the 4:00 PM close. Company data and analyst targets "
+            "refresh once each weekday before the open, around 7 to 8 AM ET.")
 
 
 def num(x):
-    """Return a finite float or None."""
     try:
         v = float(x)
         return v if math.isfinite(v) else None
     except (TypeError, ValueError):
         return None
+
+
+def market_open_window(now=None):
+    """True on weekdays between 9:30 AM and 5:05 PM New York time (covers the post-close refresh)."""
+    now = (now or datetime.now(timezone.utc)).astimezone(NY)
+    minutes = now.hour * 60 + now.minute
+    return now.weekday() < 5 and 9 * 60 + 30 <= minutes <= 17 * 60 + 5
+
+
+def set_output(key, value):
+    path = os.environ.get("GITHUB_OUTPUT")
+    if path:
+        with open(path, "a") as f:
+            f.write(f"{key}={value}\n")
 
 
 def bars_to_list(df):
@@ -49,18 +81,13 @@ def bars_to_list(df):
     df = df.dropna(subset=["Open", "High", "Low", "Close"])
     out = []
     for ts, r in df.iterrows():
-        t = int(pd.Timestamp(ts).timestamp())
-        out.append([t, round(r["Open"], 4), round(r["High"], 4), round(r["Low"], 4),
-                    round(r["Close"], 4), int(r.get("Volume", 0) or 0)])
+        out.append([int(pd.Timestamp(ts).timestamp()), round(float(r["Open"]), 2), round(float(r["High"]), 2),
+                    round(float(r["Low"]), 2), round(float(r["Close"]), 2), int(r.get("Volume", 0) or 0)])
     return out
 
 
-def analyst_targets(tk, price):
-    """Consensus target plus a recency-weighted target and the 90-day revision trend.
-
-    Uses yfinance's upgrades_downgrades table when it carries price targets; falls
-    back to the plain consensus mean otherwise.
-    """
+def analyst_targets(tk):
+    """Consensus target plus a recency-weighted target and the 90-day revision trend."""
     info = tk.info or {}
     mean = num(info.get("targetMeanPrice"))
     out = {"mean": mean, "weighted": mean, "n": info.get("numberOfAnalystOpinions"),
@@ -77,7 +104,6 @@ def analyst_targets(tk, price):
         recent = recent[recent["currentPriceTarget"].fillna(0) > 0]
         if recent.empty:
             return out
-        # Latest target per firm, weighted by age with a 45-day half-life.
         latest = recent.sort_values(date_col).groupby("Firm").tail(1)
         ages = (now - latest[date_col]).dt.days.clip(lower=0)
         weights = 0.5 ** (ages / 45.0)
@@ -97,14 +123,13 @@ def analyst_targets(tk, price):
 
 
 def earnings_dates(tk):
-    dates = []
     try:
-        ed = tk.get_earnings_dates(limit=16)
+        ed = tk.get_earnings_dates(limit=40)
         if ed is not None and not ed.empty:
-            dates = sorted({int(pd.Timestamp(d).timestamp()) for d in ed.index})
+            return sorted({int(pd.Timestamp(d).timestamp()) for d in ed.index})
     except Exception as e:
         print(f"  earnings dates unavailable: {e}", file=sys.stderr)
-    return dates
+    return []
 
 
 def fundamentals(symbol):
@@ -119,7 +144,7 @@ def fundamentals(symbol):
     earn = earnings_dates(tk)
     now = int(time.time())
     upcoming = [d for d in earn if d >= now]
-    return tk, {
+    return {
         "ticker": symbol,
         "name": info.get("shortName") or info.get("longName") or symbol,
         "sector": info.get("sector"),
@@ -134,7 +159,7 @@ def fundamentals(symbol):
         "divYield": round(div_rate / price * 100, 2) if div_rate and price else 0.0,
         "high52": high52,
         "offHighPct": round((1 - price / high52) * 100, 1) if price and high52 else None,
-        "target": analyst_targets(tk, price),
+        "target": analyst_targets(tk),
         "nextEarnings": upcoming[0] if upcoming else None,
         "earnings": earn,
     }
@@ -160,10 +185,20 @@ def benchmarks(stocks):
     return out
 
 
+def peer_bench(stock, bench):
+    ind = bench["industry"].get(stock.get("industry") or "", {})
+    if ind.get("n", 0) >= 4:
+        return {"level": "industry", "name": stock.get("industry"), **ind}
+    sec = bench["sector"].get(stock.get("sector") or "", {})
+    return {"level": "sector", "name": stock.get("sector"), **sec}
+
+
 def write_json(path, obj):
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w") as f:
+    tmp = path.with_suffix(".tmp")
+    with open(tmp, "w") as f:
         json.dump(obj, f, separators=(",", ":"))
+    tmp.replace(path)
 
 
 def load_json(path, default):
@@ -182,20 +217,21 @@ def merge_bars(old, new):
 
 
 def refresh_bars(symbol, full):
+    """Update bars/{tf}/SYMBOL.json for every timeframe and return the recent slices."""
     tk = yf.Ticker(symbol)
-    path = BARS / f"{symbol}.json"
-    store = load_json(path, {"h1": [], "m15": [], "earnings": []})
-    if full:
-        # Yahoo limits: hourly bars go back about 730 days, 15-minute bars about 60 days.
-        store["h1"] = bars_to_list(tk.history(period="730d", interval="1h", auto_adjust=True))
-        store["m15"] = bars_to_list(tk.history(period="60d", interval="15m", auto_adjust=True))
-    else:
-        store["h1"] = merge_bars(store["h1"], bars_to_list(tk.history(period="5d", interval="1h", auto_adjust=True)))
-        store["m15"] = merge_bars(store["m15"], bars_to_list(tk.history(period="5d", interval="15m", auto_adjust=True)))
-        cutoff = time.time() - 60 * 86400
-        store["m15"] = [b for b in store["m15"] if b[0] >= cutoff]
-    write_json(path, store)
-    return store
+    recent = {}
+    for tf, (interval, period, keep, max_age) in TIMEFRAMES.items():
+        path = DATA / "bars" / tf / f"{symbol}.json"
+        old = [] if full else load_json(path, [])
+        new = bars_to_list(tk.history(period=period if full or not old else "5d", interval=interval, auto_adjust=True))
+        bars = merge_bars(old, new)
+        if max_age:
+            cutoff = time.time() - max_age * 86400
+            bars = [b for b in bars if b[0] >= cutoff]
+        if bars:
+            write_json(path, bars)
+        recent[tf] = bars[-keep:]
+    return recent
 
 
 def ai_summary(stock, bench):
@@ -228,17 +264,8 @@ def ai_summary(stock, bench):
         return None
 
 
-def peer_bench(stock, bench):
-    ind = bench["industry"].get(stock.get("industry") or "", {})
-    if ind.get("n", 0) >= 4:
-        return {"level": "industry", "name": stock.get("industry"), **ind}
-    sec = bench["sector"].get(stock.get("sector") or "", {})
-    return {"level": "sector", "name": stock.get("sector"), **sec}
-
-
 def worth_summarizing(s):
-    """Only summarize stocks close to the default criteria, to keep API cost low.
-    Loose on purpose so stocks near the line still get a summary."""
+    """Only summarize stocks close to the default value criteria, to keep API cost low."""
     peer_pe = (s.get("peers") or {}).get("fwdPE")
     t = s.get("target") or {}
     target = t.get("weighted") or t.get("mean")
@@ -251,41 +278,63 @@ def worth_summarizing(s):
     )
 
 
+def market_summary(daily):
+    if len(daily) < 201:
+        return None
+    closes = [b[4] for b in daily]
+    ma = sum(closes[-200:]) / 200
+    return {"ticker": MARKET, "price": closes[-1], "ma200": round(ma, 2), "above": closes[-1] > ma,
+            "vsMaPct": round((closes[-1] / ma - 1) * 100, 1)}
+
+
+def reset_data():
+    """Remove demo or v1 data so the new layout starts clean."""
+    for p in (DATA / "bars", DATA / "recent"):
+        shutil.rmtree(p, ignore_errors=True)
+    SCREEN.unlink(missing_ok=True)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--mode", choices=["full", "hourly"], default="full")
+    ap.add_argument("--force", action="store_true", help="run an hourly refresh even outside market hours")
     ap.add_argument("--limit", type=int, default=0, help="only process the first N tickers (testing)")
     args = ap.parse_args()
     full = args.mode == "full"
 
+    screen = load_json(SCREEN, {})
+    meta = screen.get("meta", {})
+    if meta.get("demo") or meta.get("version") != VERSION:
+        if screen:
+            print("Old or demo data found: starting a clean full refresh.")
+        reset_data()
+        screen, full = {}, True
+
+    if not full and not args.force and not market_open_window():
+        print("Outside US market hours: nothing to refresh.")
+        set_output("skip", "true")
+        return
+    set_output("skip", "false")
+
     tickers = json.load(open(UNIVERSE))["tickers"]
     if args.limit:
         tickers = tickers[: args.limit]
-    screen = load_json(SCREEN, {"meta": {}, "stocks": [], "benchmarks": {}})
-    if screen.get("meta", {}).get("demo"):
-        # First real run: throw away the demo data entirely.
-        for f in BARS.glob("*.json"):
-            f.unlink()
-        screen = {"meta": {}, "stocks": [], "benchmarks": {}}
-        full = True
     old = {s["ticker"]: s for s in screen.get("stocks", [])}
+    recent = {tf: load_json(DATA / "recent" / f"{tf}.json", {}) for tf in TIMEFRAMES}
 
     stocks = []
-    for i, sym in enumerate(tickers, 1):
-        print(f"[{i}/{len(tickers)}] {sym}")
+    for i, sym in enumerate([MARKET] + tickers, 1):
+        print(f"[{i}/{len(tickers) + 1}] {sym}")
         try:
-            if full or sym not in old:
-                _, s = fundamentals(sym)
-            else:
-                s = old[sym]
-            store = refresh_bars(sym, full)
-            if store.get("earnings") != s.get("earnings") and s.get("earnings"):
-                store["earnings"] = s["earnings"]
-                write_json(BARS / f"{sym}.json", store)
-            m15 = store["m15"]
-            s["recent"] = m15[-RECENT_SESSIONS * 26:]
-            if m15:
-                s["price"] = m15[-1][4]
+            rec = refresh_bars(sym, full)
+            for tf in TIMEFRAMES:
+                recent[tf][sym] = rec[tf]
+            if sym == MARKET:
+                continue
+            s = fundamentals(sym) if full or sym not in old else old[sym]
+            last = next((rec[tf][-1] for tf in ("15m", "1h", "1d") if rec[tf]), None)
+            if last:
+                s["price"] = last[4]
                 if s.get("high52"):
                     s["offHighPct"] = round((1 - s["price"] / s["high52"]) * 100, 1)
             stocks.append(s)
@@ -295,26 +344,33 @@ def main():
                 stocks.append(old[sym])
         time.sleep(PAUSE)
 
-    bench = benchmarks(stocks) if full else screen.get("benchmarks") or benchmarks(stocks)
+    bench = benchmarks(stocks) if full or not screen.get("benchmarks") else screen["benchmarks"]
+    now_iso = datetime.now(timezone.utc).isoformat(timespec="minutes")
     for s in stocks:
         s["peers"] = peer_bench(s, bench)
-        s.pop("earnings", None)
+        prev = old.get(s["ticker"], {})
         if full:
             s["ai"] = ai_summary(s, s["peers"]) if worth_summarizing(s) else None
-            if s["ai"]:
-                s["aiDate"] = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            s["aiDate"] = datetime.now(timezone.utc).strftime("%Y-%m-%d") if s["ai"] else None
         else:
-            s["ai"] = old.get(s["ticker"], {}).get("ai")
-            s["aiDate"] = old.get(s["ticker"], {}).get("aiDate")
+            s["ai"], s["aiDate"] = prev.get("ai"), prev.get("aiDate")
 
+    for tf in TIMEFRAMES:
+        write_json(DATA / "recent" / f"{tf}.json", recent[tf])
+    latest = max((bars[-1][0] for tf in ("15m", "1h") for bars in recent[tf].values() if bars), default=None)
     write_json(SCREEN, {
         "meta": {
-            "generated": datetime.now(timezone.utc).isoformat(timespec="minutes"),
-            "fundamentalsDate": datetime.now(timezone.utc).strftime("%Y-%m-%d") if full
-            else screen.get("meta", {}).get("fundamentalsDate"),
+            "version": VERSION,
+            "generated": now_iso,
+            "mode": "full" if full else "hourly",
+            "pricesAsOf": latest,
+            "fundamentalsDate": datetime.now(timezone.utc).strftime("%Y-%m-%d") if full else meta.get("fundamentalsDate"),
+            "fundamentalsUpdated": now_iso if full else meta.get("fundamentalsUpdated"),
             "source": "Yahoo Finance via yfinance",
+            "schedule": SCHEDULE,
             "demo": False,
         },
+        "market": market_summary(recent["1d"].get(MARKET, [])),
         "benchmarks": bench,
         "stocks": stocks,
     })
