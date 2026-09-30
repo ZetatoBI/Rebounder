@@ -55,6 +55,13 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python pipeline/build_data.py ${{ steps.mode.outputs.args }}
 
+      # Default-settings signals for zetatobi.com/insights. Never blocks a deploy: if it fails,
+      # the app still publishes and Insights keeps its last good copy.
+      - name: Build signals
+        if: steps.data.outputs.skip != 'true'
+        continue-on-error: true
+        run: node pipeline/build_signals.js
+
       - uses: actions/upload-pages-artifact@v3
         if: steps.data.outputs.skip != 'true'
         with:
