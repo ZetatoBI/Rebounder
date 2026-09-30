@@ -39,6 +39,19 @@ Shared features: value and analyst filters (on by default for Channel rebound on
 | `recent/{1d,1h,15m}.json` | The latest bars for every stock (about 340 daily, 40 sessions hourly, 12 sessions of 15 min), used by the watchlist |
 | `bars/{1d,1h,15m}/TICKER.json` | Full history (10 years daily, about 2 years hourly, about 60 days of 15 min), loaded on demand for backtests |
 
+## Published signals (`web/data/signals.json`)
+
+`pipeline/build_signals.js` runs after each data refresh. It loads `web/engine.js` and `web/strategies.js`, the same code the app runs, and applies every strategy with its **default settings** and the default filters to the whole universe. It writes:
+
+- **open:** positions the default rules hold right now, with the entry date, entry price, stop, target, and for Channel rebound how many of the three buying levels have filled and where the next one sits.
+- **closed:** trades the default rules closed in the last 45 days, with the exit price and reason.
+
+Entry price is what a person could realistically get: the day's volume-weighted average price (VWAP, from 15-minute bars) for strategies that buy at the next open, or the average of the filled limit levels for Channel rebound. When 15-minute history no longer covers the day, or disagrees with that day's high and low, the day's average price (high + low + close) / 3 is used and labelled.
+
+Momentum is simulated as the real ranked strategy: on the first trading day of each month it holds stocks in the top 25% of the universe by 12-minus-1 momentum that are above their 200-day average. The app's single-stock backtest uses the absolute rule only.
+
+The file is stateless: it is rebuilt from price history on every run. The day-by-day record of these signals is kept by zetatobi.com/insights, which reads this file once a day and commits the history to its own repo. `FILTER_DEFAULTS` and `BT_DEFAULTS` at the top of the script must match `web/app.js`. If you change the app's defaults, change them in both places. If the step fails, the app still deploys.
+
 ## Refresh schedule
 
 - **Full refresh** (fundamentals, analyst targets, all history): weekdays at 12:00 UTC, which is 8 AM EDT or 7 AM EST.
