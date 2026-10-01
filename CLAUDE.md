@@ -10,7 +10,10 @@ A Zetato Studios stock-screening app. Static site in `web/`, deployed to GitHub 
   strategies hold with DEFAULT settings, and trades they closed recently. It loads the same engine and
   strategy files, so there is one implementation of every rule. Do not re-implement strategy logic elsewhere.
 - zetatobi.com/insights (repo `ZetatoBI/website`) reads `signals.json` daily and keeps the permanent,
-  forward-only track record. Changing the file's field names or meaning breaks that page: coordinate both repos.
+  forward-only track record in `insights/data/signal-history.json`. Rebounder's "Track record" view
+  (`renderRecord` in `web/app.js`) reads that file from https://zetatobi.com/insights/data/signal-history.json.
+  Changing field names or meaning in either file breaks the other side: coordinate both repos.
+- Strategy display order is the order of `STRATEGIES` in `web/strategies.js`; the first is the default.
 
 ## Rules
 - `FILTER_DEFAULTS` and `BT_DEFAULTS` in `build_signals.js` must match `web/app.js`. Change them together.
