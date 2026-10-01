@@ -15,7 +15,7 @@
   };
   const FILTER_DEFAULTS = { minCapB: 20, minDollarVolM: 250, peDiscount: 10, minOffHigh: 20, minUpside: 15, requireRising: false };
   const BT_DEFAULTS = { size: 10000, costBps: 5 };
-  let ui = { strategy: 'rebound', tf: {}, group: {}, ...store.get('ui', {}) };
+  let ui = { strategy: RWS.list[0].id, tf: {}, group: {}, ...store.get('ui', {}) };
   let filters = { ...FILTER_DEFAULTS, ...store.get('filters', {}) };
   let bt = { ...BT_DEFAULTS, ...store.get('bt', {}) };
   let alerts = store.get('alerts', []);
@@ -245,6 +245,7 @@
     renderWatchlist();
     if (!$('#rules').hidden) renderRules();
     if (view === 'test') renderTestAll();
+    else if (view === 'record') renderRecord();
     else if (selected) renderDetail();
     writeHash();
   }
@@ -274,8 +275,10 @@
     const noData = results.filter(r => r.ev.noData).length;
     $('#side-foot').innerHTML = `
       <p>${passing.length} of ${results.length} stocks pass your filters ${info('pass', 'filters')}${noData ? `<br><span class="faint">${noData} without enough ${RW.TF[tf()].long} history yet</span>` : ''}</p>
-      <button class="btn ghost wide" type="button" id="open-test" aria-pressed="${view === 'test'}">Test on all ${results.length} stocks</button>`;
+      <button class="btn ghost wide" type="button" id="open-test" aria-pressed="${view === 'test'}">Test on all ${results.length} stocks</button>
+      <button class="btn ghost wide" type="button" id="open-record" aria-pressed="${view === 'record'}">Track record since launch</button>`;
     $('#open-test').addEventListener('click', () => { view = 'test'; renderTestAll(); renderWatchlist(); writeHash(); scrollMainIntoView(); });
+    $('#open-record').addEventListener('click', () => { view = 'record'; renderRecord(); renderWatchlist(); writeHash(); scrollMainIntoView(); });
   }
   function row(r) {
     const m = r.ev.meter;
@@ -732,6 +735,81 @@
     drawCurve(res, bars);
   }
 
+  // ---------- track record (recorded forward, every trading day, by zetatobi.com/insights) ----------
+  const RECORD_URL = 'https://zetatobi.com/insights/data/signal-history.json';
+  let record = null, recordAt = 0, recordView = 'open';
+  async function loadRecord() {
+    if (record && Date.now() - recordAt < 10 * 60 * 1000) return record;
+    const r = await fetch(RECORD_URL, { cache: 'no-cache' });
+    if (!r.ok) throw new Error('The track record could not be loaded.');
+    record = await r.json(); recordAt = Date.now();
+    return record;
+  }
+  const nyDay = t => new Date(t * 1000).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  function spyReturn(spy, from, to) {
+    if (!spy || !spy.length) return null;
+    const a = spy.filter(b => nyDay(b[0]) < nyDay(from)).pop();
+    const b = to ? spy.filter(x => nyDay(x[0]) <= nyDay(to)).pop() : spy[spy.length - 1];
+    return a && b ? (b[4] / a[4] - 1) * 100 : null;
+  }
+  async function renderRecord() {
+    const st = strat(), main = $('#main');
+    main.innerHTML = `<div class="detail-head"><div><h2>Track record<span>${esc(st.name)}, default settings</span></h2></div></div>
+      <div class="card"><p class="note" id="rec-load">Loading the record…</p></div>`;
+    let h, spy;
+    try { [h, spy] = await Promise.all([loadRecord(), loadBars('1d', 'SPY').catch(() => null)]); }
+    catch (e) { main.querySelector('.card').innerHTML = `<p class="empty">${esc(e.message)}</p>`; return; }
+    if (view !== 'record' || strat().id !== st.id) return;
+    const about = (h.about || {})[st.id] || {}, hourly = (about.tf || st.defaultTf) === '1h';
+    const open = Object.values(h.open || {}).filter(r => r.s === st.id).sort((a, b) => b.entryTime - a.entryTime);
+    const closed = (h.closed || []).filter(r => r.s === st.id).sort((a, b) => (b.exitTime || 0) - (a.exitTime || 0));
+    const rets = closed.filter(r => r.ret != null);
+    const wins = rets.filter(r => r.ret > 0).length, losses = rets.length - wins;
+    const avg = rets.length ? rets.reduce((a, r) => a + r.ret, 0) / rets.length : null;
+    const benches = rets.map(r => spyReturn(spy, r.entryTime, r.exitTime)).filter(v => v != null);
+    const avgB = benches.length ? benches.reduce((a, v) => a + v, 0) / benches.length : null;
+    const when = t => hourly ? fmt.dateTime(t) : fmt.date(t);
+    const KIND = { vwap: "day's VWAP", dayavg: "day's average", ladder: 'avg of limit fills', open: 'open' };
+    const sign = v => v == null ? 'n/a' : `<span class="${v >= 0 ? 'pos' : 'neg'}">${fmt.signed(v)}</span>`;
+    let pre = false;
+    const openRows = open.map(r => {
+      if (r.pre) pre = true;
+      const b = spyReturn(spy, r.entryTime), stop = r.stop == null ? '<span class="faint">None</span>' :
+        `${fmt.price(r.stop)}<br><span class="${r.toStop != null && r.toStop <= 2 ? 'neg' : 'faint'}">${r.toStop != null ? fmt.pct(r.toStop) + ' away' : ''}</span>`;
+      const ladder = r.of ? `<br><span class="faint">${r.filled} of ${r.of} bought${r.nextBuy ? ', next ' + fmt.price(r.nextBuy) : ''}</span>` : '';
+      return `<tr><td><b>${esc(r.t)}</b>${r.pre ? ' †' : ''}<br><span class="faint">${esc(r.name || '')}</span></td><td>${when(r.entryTime)}</td>
+        <td>${fmt.price(r.entryRef)}<br><span class="faint">${KIND[r.entryKind] || ''}</span>${ladder}</td><td>${fmt.price(r.last)}</td><td>${sign(r.ret)}</td>
+        <td>${sign(r.ret != null && b != null ? r.ret - b : null)}</td><td>${stop}</td></tr>`;
+    }).join('');
+    const closedRows = closed.map(r => {
+      if (r.pre) pre = true;
+      const b = spyReturn(spy, r.entryTime, r.exitTime);
+      return `<tr><td><b>${esc(r.t)}</b>${r.pre ? ' †' : ''}<br><span class="faint">${esc(r.name || '')}</span></td><td>${when(r.entryTime)}</td><td>${r.exitTime ? when(r.exitTime) : 'n/a'}</td>
+        <td><span class="badge ${/^Stop/.test(r.reason) ? '' : 'muted'}">${esc(r.reason || 'Closed')}</span></td><td>${fmt.price(r.entryRef)}</td><td>${fmt.price(r.exit)}</td>
+        <td><b>${sign(r.ret)}</b></td><td>${sign(r.ret != null && b != null ? r.ret - b : null)}</td></tr>`;
+    }).join('');
+    const isOpen = recordView === 'open';
+    main.querySelector('.card').outerHTML = `
+      <div class="card">
+        <p class="flat muted">Every position the default rules took since ${fmt.date(new Date(h.started + 'T12:00:00') / 1000)}, recorded each trading day and never back-filled. Closed trades stay listed, winners and losers alike. ${esc(about.exitRule ? 'Exit: ' + about.exitRule + '.' : '')}</p>
+        <div class="stats" style="margin-top:12px">
+          <div class="stat"><small>Open now</small><b>${open.length}</b></div>
+          <div class="stat"><small>Closed: wins / losses</small><b>${rets.length ? `<span class="pos">${wins} W</span> · <span class="neg">${losses} L</span>` : '0'}</b></div>
+          <div class="stat"><small>Average closed trade</small><b>${sign(avg)}</b></div>
+          <div class="stat"><small>S&amp;P 500, same days</small><b>${sign(avgB)}</b></div>
+        </div>
+        <div class="row-controls"><div class="seg mini" role="group" aria-label="Show">
+          <button type="button" data-rv="open" aria-pressed="${isOpen}">Open (${open.length})</button><button type="button" data-rv="closed" aria-pressed="${!isOpen}">Closed (${rets.length})</button></div>
+          <span class="faint" style="font-size:13px">Signals as of ${h.signalsAsOf ? fmt.clock(new Date(h.signalsAsOf)) : 'n/a'}</span></div>
+        <div class="table-scroll tall"><table class="trades">
+          ${isOpen ? `<thead><tr><th>Stock</th><th>Signal</th><th>Entry</th><th>Now</th><th>Return</th><th>vs S&amp;P 500</th><th>Stop</th></tr></thead><tbody>${openRows || '<tr><td colspan="7" class="faint" style="text-align:left">The rules hold no positions right now.</td></tr>'}</tbody>`
+          : `<thead><tr><th>Stock</th><th>Entered</th><th>Exited</th><th>Result</th><th>Entry</th><th>Exit</th><th>Return</th><th>vs S&amp;P 500</th></tr></thead><tbody>${closedRows || `<tr><td colspan="8" class="faint" style="text-align:left">No closed trades yet since ${esc(h.started)}.</td></tr>`}</tbody>`}
+        </table></div>
+        <p class="note">Entry is a price a person could realistically get: the day's volume-weighted average for strategies that buy at the open, or the average of the filled limit orders for Channel rebound. A win is a trade that closed above its entry.${pre ? ' † Already open when recording began.' : ''} Hypothetical, before costs and taxes; not a recommendation.</p>
+      </div>`;
+    $$('#main [data-rv]').forEach(b => b.addEventListener('click', () => { recordView = b.dataset.rv; renderRecord(); }));
+  }
+
   // ---------- test on all stocks ----------
   let testRun = 0;
   async function renderTestAll() {
@@ -840,13 +918,13 @@
   // ---------- url ----------
   function writeHash() {
     const parts = [strat().id, tf()];
-    if (view === 'test') parts.push('all'); else if (selected) parts.push(selected);
+    if (view === 'test') parts.push('all'); else if (view === 'record') parts.push('record'); else if (selected) parts.push(selected);
     history.replaceState(null, '', '#' + parts.join('/'));
   }
   function readHash() {
     const [sid, t, tk] = decodeURIComponent(location.hash.slice(1)).split('/');
     if (sid && RWS.byId[sid]) { ui.strategy = sid; if (t && RWS.byId[sid].timeframes.includes(t)) ui.tf[sid] = t; }
-    if (tk === 'all') view = 'test'; else if (tk) selected = tk.toUpperCase();
+    if (tk === 'all') view = 'test'; else if (tk === 'record') view = 'record'; else if (tk) selected = tk.toUpperCase();
   }
 
   // ---------- boot ----------
@@ -870,6 +948,7 @@
     renderWatchlist();
     if (first) {
       if (view === 'test') renderTestAll();
+      else if (view === 'record') renderRecord();
       else if (selected && results.some(r => r.s.ticker === selected)) renderDetail();
       else {
         const firstBtn = $('#watchlist button.stock');

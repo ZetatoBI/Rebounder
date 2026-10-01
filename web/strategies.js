@@ -492,7 +492,7 @@
     },
   };
 
-  const STRATEGIES = [rebound, meanrev, trend, momentum];
+  const STRATEGIES = [meanrev, trend, momentum, rebound];   // display order; the first is the default
   const api = { list: STRATEGIES, byId: Object.fromEntries(STRATEGIES.map(s => [s.id, s])) };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.RWS = api;
